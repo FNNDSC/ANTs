@@ -1,60 +1,45 @@
-FROM ubuntu:bionic-20220427 as builder
+FROM docker.io/mambaorg/micromamba:1.5.5-bookworm-slim AS micromamba
+FROM micromamba AS builder
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-                    apt-transport-https \
-                    bc \
-                    build-essential \
-                    ca-certificates \
-                    gnupg \
-                    ninja-build \
-                    git \
-                    software-properties-common \
-                    wget
+RUN \
+    --mount=type=cache,sharing=private,target=/home/mambauser/.mamba/pkgs,uid=57439,gid=57439 \
+    --mount=type=cache,sharing=private,target=/opt/conda/pkgs,uid=57439,gid=57439 \
+    micromamba -y -n base install -c conda-forge cmake=3.28.1 ninja=1.10.2 cxx-compiler=1.5.2 git
 
-RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null \
-    | apt-key add - \
-  && apt-add-repository -y 'deb https://apt.kitware.com/ubuntu/ bionic main' \
-  && apt-get update \
-  && apt-get -y install cmake=3.18.3-0kitware1 cmake-data=3.18.3-0kitware1
+ARG MAMBA_DOCKERFILE_ACTIVATE=1
+RUN mkdir /home/mambauser/ants
+RUN git config --global url.'https://'.insteadOf 'git://'
+COPY --chown=57439:57439 . /home/mambauser/src
 
-ADD . /tmp/ants/source
-RUN mkdir -p /tmp/ants/build \
-    && cd /tmp/ants/build \
-    && mkdir -p /opt/ants \
-    && git config --global url."https://".insteadOf git:// \
-    && cmake \
-      -GNinja \
-      -DBUILD_TESTING=ON \
-      -DRUN_LONG_TESTS=OFF \
-      -DRUN_SHORT_TESTS=ON \
-      -DBUILD_SHARED_LIBS=ON \
-      -DCMAKE_INSTALL_PREFIX=/opt/ants \
-      /tmp/ants/source \
-    && cmake --build . --parallel \
-    && cd ANTS-build \
-    && cmake --install .
+WORKDIR /home/mambauser/build
 
-# Need to set library path to run tests
-ENV LD_LIBRARY_PATH="/opt/ants/lib:$LD_LIBRARY_PATH"
+RUN cmake \
+    -GNinja \
+    -DBUILD_TESTING=ON \
+    -DRUN_LONG_TESTS=OFF \
+    -DRUN_SHORT_TESTS=ON \
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_INSTALL_PREFIX=/home/mambauser/ants \
+    /home/mambauser/src
+RUN cmake --build . --parallel
+WORKDIR /home/mambauser/build/ANTS-build
+RUN cmake --install .
 
-RUN cd /tmp/ants/build/ANTS-build \
-    && cmake --build . --target test
+FROM micromamba
 
-FROM ubuntu:bionic-20220427
-COPY --from=builder /opt/ants /opt/ants
+RUN \
+    --mount=type=cache,sharing=private,target=/home/mambauser/.mamba/pkgs,uid=57439,gid=57439 \
+    --mount=type=cache,sharing=private,target=/opt/conda/pkgs,uid=57439,gid=57439 \
+    micromamba -y -n base install -c conda-forge libiconv=1.17
 
-LABEL maintainer="ANTsX team" \
-      description="ANTs is part of the ANTsX ecosystem (https://github.com/ANTsX). \
-ANTs Citation: https://pubmed.ncbi.nlm.nih.gov/24879923"
-
+COPY --from=builder /home/mambauser/ants /opt/ants
 ENV PATH="/opt/ants/bin:$PATH" \
     LD_LIBRARY_PATH="/opt/ants/lib:$LD_LIBRARY_PATH"
-RUN apt-get update \
-    && apt install -y --no-install-recommends bc \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-WORKDIR /data
-
-CMD ["/bin/bash"]
+LABEL org.opencontainers.image.authors="ANTsX team" \
+      org.opencontainers.image.url="https://stnava.github.io/ANTs/" \
+      org.opencontainers.image.source="https://github.com/ANTsX/ANTs" \
+      org.opencontainers.image.licenses="Apache License 2.0" \
+      org.opencontainers.image.title="Advanced Normalization Tools" \
+      org.opencontainers.image.description="ANTs is part of the ANTsX ecosystem (https://github.com/ANTsX). \
+ANTs Citation: https://pubmed.ncbi.nlm.nih.gov/24879923"
